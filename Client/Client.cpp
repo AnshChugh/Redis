@@ -1,12 +1,62 @@
 #include <WinSock2.h>
 #include <WS2tcpip.h>
 #include <stdio.h>
+#include <cstdint>
+#include "../common/socket_utils.h"
 
 #pragma comment(lib, "Ws2_32.lib")
 
 #define DEFAULT_PORT "27015"
 
 #define DEFAULT_BUFLEN 512
+
+const size_t k_max_msg = 4096;
+
+
+// protocol 4-byte little endian inteeger indicating length of request , followed by 
+// variable-length request
+static int32_t query(SOCKET connectionSocket, const char* text) {
+	uint32_t len = (uint32_t)strlen(text);
+	if (len > k_max_msg) {
+		printf("Error: too long \n");
+		return SOCKET_ERROR;
+	}
+
+	char wbuf[4 + k_max_msg];
+	// write using format length followed by data
+	memcpy(wbuf, &len, 4); // assume little endian
+	memcpy(&wbuf[4], text, len);
+
+	// returns -1 if unsuccessful
+	int32_t err = write_full(connectionSocket, wbuf, len + 4);
+	if (err == SOCKET_ERROR) {
+		printf("write error\n");
+		return err;
+	}
+	 // 4 bytes header
+	char rbuf[4+k_max_msg + 1];
+	errno = 0;
+	err = read_full(connectionSocket, rbuf, 4);
+	if (err == SOCKET_ERROR) {
+		return SOCKET_ERROR;
+	}
+
+	memcpy(&len, rbuf, 4); // assume little endian
+	if (len > k_max_msg) {
+		printf("error: too long\n");
+		return SOCKET_ERROR;
+	}
+
+	// reply body
+	err = read_full(connectionSocket, &rbuf[4], len);
+	if (err == SOCKET_ERROR) return SOCKET_ERROR;
+
+	// do something
+	rbuf[4 + len] = '\0';
+	printf("server says: %s\n", &rbuf[4]);
+
+	return 0;
+}
 
 int main(int argc, char *argv[]) {
 
@@ -71,44 +121,20 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-
-	int recvbuflen = DEFAULT_BUFLEN;
-	
-	const char* sendbuf = "Hi, from client\0";
-	int sendbuflen = strlen(sendbuf) + 1;
-	char recvbuf[DEFAULT_BUFLEN];
-
-	// send an initial buffer
-	iResult = send(ConnectSocket, sendbuf, sendbuflen, 0);
+	iResult = query(ConnectSocket, "hello 1");
 	if (iResult == SOCKET_ERROR) {
-		printf("send failed %d\n", WSAGetLastError());
+		printf("query failed error: %d\n", WSAGetLastError());
 		closesocket(ConnectSocket);
 		WSACleanup();
 		return 1;
 	}
-
-	printf("Bytes sent: %d\n", iResult);
-
-	// shutdown the connection for sending since no more data will be sent
-	// the client can still use the ConnectSocket for receiving data
-	iResult = shutdown(ConnectSocket, SD_SEND);
+	iResult = query(ConnectSocket, "hello 2");
 	if (iResult == SOCKET_ERROR) {
-		printf("shutdown failed: %d\n", WSAGetLastError());
+		printf("query failed error: %d\n", WSAGetLastError());
 		closesocket(ConnectSocket);
 		WSACleanup();
 		return 1;
 	}
-
-	// Receive data until the server closes the connection
-	do {
-		iResult = recv(ConnectSocket, recvbuf, recvbuflen, 0);
-		if (iResult > 0)
-			printf("server says: %s\n", recvbuf);
-		else if (iResult == 0)
-			printf("Connection closed\n");
-		else
-			printf("recv failed: %d\n", WSAGetLastError());
-	} while (iResult > 0);
 
 
 	// cleanup

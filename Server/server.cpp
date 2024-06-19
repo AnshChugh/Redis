@@ -1,12 +1,61 @@
 #include <WinSock2.h>
 #include <WS2tcpip.h>
 #include <stdio.h>
-
+#include <cstdint>
+#include "../common/socket_utils.h"
 #pragma comment(lib, "Ws2_32.lib")
 
 #define DEFAULT_PORT "27015"
 
 #define DEFAULT_BUFLEN 512
+
+const size_t k_max_msg = 4096;
+
+
+// protocol 4-byte little endian inteeger indicating length of request , followed by 
+// variable-length request
+
+static int32_t one_request(SOCKET connectionSocket) {
+	// 4bytes header
+	char rbuf[4 + k_max_msg + 1]; // buffer large enough to hold one request;
+
+	int32_t err = read_full(connectionSocket, rbuf, 4);
+	if (err == SOCKET_ERROR) {
+		printf("read error: %d\n", WSAGetLastError());
+		return err;
+	}
+
+	// change the given length from buffer to int
+	uint32_t len = 0;
+	memcpy(&len, rbuf, 4); // assume little endian
+
+	if (len > k_max_msg) {
+		printf("too long\n");
+		return -1;
+	}
+
+	// request body  (data bytes)
+	err = read_full(connectionSocket, &rbuf[4], len);
+	if (err == SOCKET_ERROR) {
+		printf("read error\n");
+	}
+
+	// do something
+	rbuf[4 + len] = '\0'; // added null termination so that printf does not print unneccesary garbage
+	printf("Client Says : %s\n", &rbuf[4]);
+
+
+	// reply using the same protocol;
+	const char reply[] = "Hi, from Server";
+	char wbuf[4 + sizeof(reply)];
+	len = (uint32_t)strlen(reply);
+	memcpy(wbuf, &len, 4); // write the lengh as bytes
+	memcpy(&wbuf[4], reply, len); // write the data as bytes
+	
+	return write_full(connectionSocket, wbuf, 4 + len);
+}
+
+
 
 int main() {
 	WSADATA wsaData;
@@ -72,51 +121,40 @@ int main() {
 
 	ClientSocket = INVALID_SOCKET;
 
-	// accept a client socket
-	ClientSocket = accept(ListenSocket, NULL, NULL);
-	if (ClientSocket == INVALID_SOCKET) {
-		printf("accept failed: %ld\n", WSAGetLastError());
-		closesocket(ClientSocket);
-		WSACleanup();
-		return 1;
-	}
-
-
-
-	char recvbuf[DEFAULT_BUFLEN];
-	int  iSendResult;
-	int recvbuflen = DEFAULT_BUFLEN;
-
-	// Receive until the peer shuts down the connection
-	do {
-
-		iResult = recv(ClientSocket, recvbuf, recvbuflen, 0);
-		if (iResult > 0) {
-			printf("Client Says %s\n", recvbuf);
-
-			char sendvbuf[] = "Server Says Hi";
-
-			// Echo the buffer back to the sender
-			iSendResult = send(ClientSocket, sendvbuf, iResult, 0);
-			if (iSendResult == SOCKET_ERROR) {
-				printf("send failed: %d\n", WSAGetLastError());
-				closesocket(ClientSocket);
-				WSACleanup();
-				return 1;
-			}
-			printf("Bytes sent: %d\n", iSendResult);
+	// handle multiple requests
+	while (true) {
+		// accept a client socket
+		ClientSocket = accept(ListenSocket, NULL, NULL);
+		if (ClientSocket == INVALID_SOCKET) {
+			printf("accept failed: %ld\n", WSAGetLastError());
+			closesocket(ClientSocket);
+			WSACleanup();
+			return 1;
 		}
-		else if (iResult == 0)
-			printf("Connection closing...\n");
-		else {
-			printf("recv failed: %d\n", WSAGetLastError());
+		// only serves one client at a time
+		while (true) {
+			int32_t err = one_request(ClientSocket);
+			if (err == SOCKET_ERROR) {
+				break;
+			}
+		}
+
+		// shutdown the send half of the connection since no more data will be sent
+		iResult = shutdown(ClientSocket, SD_SEND);
+		if (iResult == SOCKET_ERROR) {
+			printf("shutdown failed: %d\n", WSAGetLastError());
 			closesocket(ClientSocket);
 			WSACleanup();
 			return 1;
 		}
 
-	} while (iResult > 0);
+		// closesocket
+		closesocket(ClientSocket);
+	}
 
+	// no need to listen now
+	closesocket(ListenSocket);
+	WSACleanup();
 
 	return 0;
 }
