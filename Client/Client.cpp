@@ -12,51 +12,9 @@
 
 const size_t k_max_msg = 4096;
 
+static int32_t send_req(SOCKET, const char*);
+static int32_t  read_res(SOCKET);
 
-// protocol 4-byte little endian inteeger indicating length of request , followed by 
-// variable-length request
-static int32_t query(SOCKET connectionSocket, const char* text) {
-	uint32_t len = (uint32_t)strlen(text);
-	if (len > k_max_msg) {
-		printf("Error: too long \n");
-		return SOCKET_ERROR;
-	}
-
-	char wbuf[4 + k_max_msg];
-	// write using format length followed by data
-	memcpy(wbuf, &len, 4); // assume little endian
-	memcpy(&wbuf[4], text, len);
-
-	// returns -1 if unsuccessful
-	int32_t err = write_full(connectionSocket, wbuf, len + 4);
-	if (err == SOCKET_ERROR) {
-		printf("write error\n");
-		return err;
-	}
-	 // 4 bytes header
-	char rbuf[4+k_max_msg + 1];
-	errno = 0;
-	err = read_full(connectionSocket, rbuf, 4);
-	if (err == SOCKET_ERROR) {
-		return SOCKET_ERROR;
-	}
-
-	memcpy(&len, rbuf, 4); // assume little endian
-	if (len > k_max_msg) {
-		printf("error: too long\n");
-		return SOCKET_ERROR;
-	}
-
-	// reply body
-	err = read_full(connectionSocket, &rbuf[4], len);
-	if (err == SOCKET_ERROR) return SOCKET_ERROR;
-
-	// do something
-	rbuf[4 + len] = '\0';
-	printf("server says: %s\n", &rbuf[4]);
-
-	return 0;
-}
 
 int main(int argc, char *argv[]) {
 
@@ -115,34 +73,76 @@ int main(int argc, char *argv[]) {
 
 	freeaddrinfo(result);
 
-	if (ConnectSocket == INVALID_SOCKET) {
-		printf("Unable to connect to server!\n");
-		WSACleanup();
-		return 1;
+	const char* query_list[3] = { "hello1", "hello2" , "hello3" };
+	
+	for (size_t i = 0; i < 3; i++) {
+		iResult = send_req(ConnectSocket, query_list[i]);
+		if (iResult == SOCKET_ERROR) {
+			goto CLEANUP;
+		}
+	}
+	for (size_t i = 0; i < 3; i++) {
+		iResult = read_res(ConnectSocket);
+		if (iResult == SOCKET_ERROR) {
+			goto CLEANUP;
+		}
 	}
 
-	iResult = query(ConnectSocket, "hello 1");
-	if (iResult == SOCKET_ERROR) {
-		printf("query failed error: %d\n", WSAGetLastError());
-		closesocket(ConnectSocket);
-		WSACleanup();
-		return 1;
-	}
-	iResult = query(ConnectSocket, "hello 2");
-	if (iResult == SOCKET_ERROR) {
-		printf("query failed error: %d\n", WSAGetLastError());
-		closesocket(ConnectSocket);
-		WSACleanup();
-		return 1;
-	}
-
-
+	CLEANUP:
 	// cleanup
 	closesocket(ConnectSocket);
 	WSACleanup();
 
 	return 0;
+}
 
+
+// protocol 4-byte little endian inteeger indicating length of request , followed by 
+// variable-length request
+
+static int32_t send_req(SOCKET socket, const char* text) {
+	uint32_t len = (uint32_t)strlen(text);
+	if (len > k_max_msg) {
+		printf("Error: too long \n");
+		return SOCKET_ERROR;
+	}
+
+	char wbuf[4 + k_max_msg];
+	// write using format length followed by data
+	memcpy(wbuf, &len, 4); // assume little endian
+	memcpy(&wbuf[4], text, len);
+
+	// returns -1 if unsuccessful
+	int32_t err = write_full(socket, wbuf, len + 4);
+	if (err == SOCKET_ERROR) {
+		printf("write error\n");
+		return err;
+	}
+	return 0;
+}
+static int32_t read_res(SOCKET socket) {
+	uint32_t len;
+	// 4 bytes header
+	char rbuf[4 + k_max_msg + 1];
+	errno = 0;
+	int32_t err = read_full(socket, rbuf, 4);
+	if (err == SOCKET_ERROR) {
+		return SOCKET_ERROR;
+	}
+
+	memcpy(&len, rbuf, 4); // assume little endian
+	if (len > k_max_msg) {
+		printf("error: too long\n");
+		return SOCKET_ERROR;
+	}
+
+	// reply body
+	err = read_full(socket, &rbuf[4], len);
+	if (err == SOCKET_ERROR) return SOCKET_ERROR;
+
+	// do something
+	rbuf[4 + len] = '\0';
+	printf("server says: %s\n", &rbuf[4]);
 
 	return 0;
 }
